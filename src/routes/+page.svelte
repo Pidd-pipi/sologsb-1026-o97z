@@ -39,6 +39,35 @@
     activities: Activity[];
   }
 
+  interface ScheduledSlot {
+    activityId: string;
+    title: string;
+    type: ActivityType;
+    duration: number;
+  }
+
+  interface ScheduleDay {
+    date: string;
+    minutesUsed: number;
+    slots: ScheduledSlot[];
+  }
+
+  interface CourseSchedule {
+    id: string;
+    versionId: string;
+    versionLabel: string;
+    startDate: string;
+    dailyMinutes: number;
+    createdAt: string;
+    days: ScheduleDay[];
+  }
+
+  interface ScheduleNotice {
+    kind: 'error' | 'warning' | 'success';
+    title: string;
+    subtitle: string;
+  }
+
   interface Course {
     id: string;
     title: string;
@@ -47,6 +76,7 @@
     objective: string;
     activities: Activity[];
     versions: CourseVersion[];
+    schedules: CourseSchedule[];
     updatedAt: string;
   }
 
@@ -132,8 +162,7 @@
       {
         id: 'v-1', label: '初稿', savedAt: '2026-09-21T10:00:00+08:00', note: '完成音素和基础拼读活动。',
         activities: []
-      },
-      {
+      },      {
         id: 'v-2', label: '增加句子迁移', savedAt: '2026-09-24T15:30:00+08:00', note: '补充 A man sat and had a nap.',
         activities: [
           {
@@ -154,7 +183,8 @@
           }
         ]
       }
-    ]
+    ],
+    schedules: []
   });
 
   let course: Course = initialCourse();
@@ -163,6 +193,10 @@
   let previewWidth: PreviewWidth = 'desktop';
   let compareBaseId = course.versions[0]?.id ?? '';
   let compareTargetId = course.versions.at(-1)?.id ?? '';
+  let scheduleVersionId = course.versions.find((version) => version.activities.length > 0)?.id ?? course.versions.at(-1)?.id ?? '';
+  let scheduleStartDate = todayKey();
+  let scheduleDailyMinutes = '30';
+  let scheduleNotice: ScheduleNotice | null = null;
   let hydrated = false;
   let online = true;
   let savedLabel = '等待载入';
@@ -172,6 +206,9 @@
   let selectedActivity: Activity | null = null;
   let diagnostics: Diagnostic[] = [];
   let versionDiff: VersionDiff[] = [];
+  let dateOccupants = new Map<string, CourseSchedule[]>();
+  let conflictDates = new Set<string>();
+  let schedulesWithConflicts = new Set<string>();
 
   $: selectedActivity = course.activities.find((activity) => activity.id === selectedActivityId) ?? course.activities[0] ?? null;
   $: diagnostics = analyzeCourse(course);
@@ -179,6 +216,26 @@
   $: errorCount = diagnostics.filter((issue) => issue.level === 'error').length;
   $: warningCount = diagnostics.filter((issue) => issue.level === 'warning').length;
   $: totalMinutes = course.activities.reduce((sum, activity) => sum + activity.duration, 0);
+  $: schedules = [...course.schedules].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  $: scheduleVersion = course.versions.find((version) => version.id === scheduleVersionId) ?? null;
+  $: scheduleVersionMinutes = scheduleVersion?.activities.reduce((sum, activity) => sum + activity.duration, 0) ?? 0;
+  $: scheduleVersionCounts = new Map(course.versions.map((version) => [
+    version.id,
+    course.schedules.filter((schedule) => schedule.versionId === version.id).length
+  ]));
+  // 每个上课日期 -> 占用它的排期；同一日期出现在多份排期时即为冲突。
+  // 放在同一个响应式块中，确保新增/删除排期时整体重算。
+  $: {
+    const occupants = new Map<string, CourseSchedule[]>();
+    course.schedules.forEach((schedule) => {
+      schedule.days.forEach((day) => {
+        occupants.set(day.date, [...(occupants.get(day.date) ?? []), schedule]);
+      });
+    });
+    dateOccupants = occupants;
+    conflictDates = new Set([...occupants].filter(([, owners]) => owners.length > 1).map(([date]) => date));
+    schedulesWithConflicts = new Set([...conflictDates].flatMap((date) => occupants.get(date)?.map((item) => item.id) ?? []));
+  }
 
   onMount(() => {
     const stored = localStorage.getItem(STORAGE_KEY);
@@ -188,6 +245,14 @@
         selectedActivityId = course.activities[0]?.id ?? '';
         compareBaseId = course.versions[0]?.id ?? '';
         compareTargetId = course.versions.at(-1)?.id ?? '';
+        if (course.versions.length) {
+          scheduleVersionId = course.versions.find((version) => version.id === scheduleVersionId)?.id
+            ?? course.versions.find((version) => version.activities.length > 0)?.id
+            ?? course.versions.at(-1)?.id
+            ?? '';
+        } else {
+          scheduleVersionId = '';
+        }
         savedLabel = `已恢复 · ${formatTime(course.updatedAt)}`;
       } catch {
         localStorage.removeItem(STORAGE_KEY);
@@ -210,6 +275,7 @@
   function migrateCourse(value: Course): Course {
     if (!value.id || !Array.isArray(value.activities)) return initialCourse();
     value.versions ??= [];
+    value.schedules ??= [];
     return value;
   }
 
@@ -371,20 +437,144 @@
       copy.id = `course-${Date.now()}`;
       copy.title = `${copy.title} · 副本`;
       copy.versions = [];
+      copy.schedules = [];
       copy.activities.forEach((activity) => {
         activity.title = activity.title.replace('（副本）', '') + '（复制）';
       });
       draft.id = copy.id;
       draft.title = copy.title;
       draft.versions = copy.versions;
+      draft.schedules = copy.schedules;
       draft.activities = copy.activities;
     });
+    scheduleVersionId = '';
+    scheduleNotice = null;
     savedLabel = '课程已复制为新草稿';
   }
 
   function focusIssue(issue: Diagnostic): void {
     selectedActivityId = issue.activityId;
     activeView = 'compose';
+  }
+
+  // 使用 UTC 处理“上课日”，避免本地时区带来的日期偏移。
+  function todayKey(): string {
+    const now = new Date();
+    return dateToKey(new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())));
+  }
+
+  function dateToKey(date: Date): string {
+    return date.toISOString().slice(0, 10);
+  }
+
+  function shiftDateKey(key: string, days: number): string {
+    const date = new Date(`${key}T00:00:00Z`);
+    date.setUTCDate(date.getUTCDate() + days);
+    return dateToKey(date);
+  }
+
+  const weekdayFormatter = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'UTC', month: 'long', day: 'numeric', weekday: 'short'
+  });
+
+  function formatDateKey(key: string): string {
+    const date = new Date(`${key}T00:00:00Z`);
+    return Number.isNaN(date.getTime()) ? key : weekdayFormatter.format(date);
+  }
+
+  function isValidDateKey(key: string): boolean {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) return false;
+    const date = new Date(`${key}T00:00:00Z`);
+    return !Number.isNaN(date.getTime()) && dateToKey(date) === key;
+  }
+
+  // 按活动顺序与每日可用分钟数贪心分配；当天装不下就顺延到下一日。
+  function buildScheduleDays(activities: Activity[], startDate: string, dailyMinutes: number): ScheduleDay[] {
+    const days: ScheduleDay[] = [];
+    let current: ScheduleDay | null = null;
+    let dayOffset = 0;
+    activities.forEach((activity) => {
+      if (current && current.minutesUsed + activity.duration > dailyMinutes) {
+        dayOffset += 1;
+        current = null;
+      }
+      if (!current) {
+        current = { date: shiftDateKey(startDate, dayOffset), minutesUsed: 0, slots: [] };
+        days.push(current);
+      }
+      current.minutesUsed += activity.duration;
+      current.slots.push({
+        activityId: activity.id, title: activity.title, type: activity.type, duration: activity.duration
+      });
+    });
+    return days;
+  }
+
+  function createSchedule(): void {
+    const version = course.versions.find((item) => item.id === scheduleVersionId);
+    if (!version) {
+      scheduleNotice = { kind: 'error', title: '请先选择存档版本', subtitle: '从课程版本时间线中选择一个已存档版本后再排课。' };
+      return;
+    }
+    if (version.activities.length === 0) {
+      scheduleNotice = { kind: 'error', title: `「${version.label}」没有可排期的活动`, subtitle: '请选择包含活动的存档版本。' };
+      return;
+    }
+    if (!isValidDateKey(scheduleStartDate)) {
+      scheduleNotice = { kind: 'error', title: '首次上课日期无效', subtitle: '请按年-月-日格式选择一个日期，例如 2026-10-08。' };
+      return;
+    }
+    const dailyMinutes = Math.floor(Number(scheduleDailyMinutes));
+    if (!Number.isFinite(dailyMinutes) || dailyMinutes < 1) {
+      scheduleNotice = { kind: 'error', title: '每天可用分钟数无效', subtitle: '请填写至少 1 分钟。' };
+      return;
+    }
+
+    const days = buildScheduleDays(version.activities, scheduleStartDate, dailyMinutes);
+    const clashes = days
+      .map((day) => day.date)
+      .filter((date, index, all) => all.indexOf(date) === index)
+      .filter((date) => (dateOccupants.get(date) ?? []).length > 0);
+
+    const schedule: CourseSchedule = {
+      id: `s-${Date.now()}`,
+      versionId: version.id,
+      versionLabel: version.label,
+      startDate: scheduleStartDate,
+      dailyMinutes,
+      createdAt: new Date().toISOString(),
+      days
+    };
+    commit((draft) => { draft.schedules.push(schedule); });
+
+    if (clashes.length) {
+      scheduleNotice = {
+        kind: 'warning',
+        title: `排期已生成，${clashes.length} 个上课日与已有排期冲突`,
+        subtitle: `冲突日期：${clashes.map(formatDateKey).join('、')}。原排期已完整保留，请老师自行调整其中一份安排。`
+      };
+    } else {
+      scheduleNotice = {
+        kind: 'success',
+        title: `已按「${version.label}」生成 ${days.length} 天课堂排期`,
+        subtitle: `首次上课 ${formatDateKey(scheduleStartDate)}，每天 ${dailyMinutes} 分钟。之后课程再生成新草稿也不会影响已排课堂。`
+      };
+    }
+  }
+
+  function removeSchedule(scheduleId: string): void {
+    commit((draft) => { draft.schedules = draft.schedules.filter((item) => item.id !== scheduleId); });
+    if (scheduleNotice?.kind === 'warning' && !schedulesWithConflicts.size) scheduleNotice = null;
+  }
+
+  function useVersionForSchedule(versionId: string): void {
+    scheduleVersionId = versionId;
+    scheduleNotice = null;
+    document.getElementById('schedule-board')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function conflictOwners(date: string, scheduleId: string): CourseSchedule[] {
+    return (dateOccupants.get(date) ?? []).filter((item) => item.id !== scheduleId);
   }
 
   function analyzeCourse(current: Course): Diagnostic[] {
@@ -771,7 +961,7 @@
   {#if activeView === 'versions'}
     <main class="versions-view">
       <div class="view-heading">
-        <div><span class="kicker">REUSE & HISTORY</span><h2>版本与课程复用</h2><p>复制课程不会覆盖原课程；存档版本包含完整活动、依赖和教学说明。</p></div>
+        <div><span class="kicker">REUSE & HISTORY</span><h2>版本与课程复用</h2><p>复制课程不会覆盖原课程；存档版本包含完整活动、依赖和教学说明。课堂排期锁定所选存档版本，之后生成新草稿不影响已排课堂。</p></div>
         <div class="version-actions"><Button kind="tertiary" on:click={copyCourse}>复制课程</Button><Button kind="primary" on:click={saveVersion}>保存新版本</Button></div>
       </div>
       <div class="version-layout-svelte">
@@ -780,7 +970,15 @@
           {#each course.versions as version, index (version.id)}
             <article class:latest={index === course.versions.length - 1}>
               <span class="timeline-dot"></span>
-              <div><b>{version.label}</b><h4>{version.note}</h4><p>{formatTime(version.savedAt)} · {version.activities.length} 个活动</p></div>
+              <div class="timeline-body">
+                <div class="timeline-head">
+                  <b>{version.label}</b>
+                  {#if scheduleVersionCounts.get(version.id)}<span class="schedule-count">已排 {scheduleVersionCounts.get(version.id)} 次</span>{/if}
+                  <Button size="small" kind="ghost" disabled={version.activities.length === 0} on:click={() => useVersionForSchedule(version.id)}>排课</Button>
+                </div>
+                <h4>{version.note}</h4>
+                <p>{formatTime(version.savedAt)} · {version.activities.length} 个活动</p>
+              </div>
             </article>
           {/each}
         </Tile>
@@ -803,6 +1001,104 @@
           </div>
         </Tile>
       </div>
+
+      <section id="schedule-board" class="schedule-board">
+        <Tile class="schedule-planner">
+          <div class="section-title">
+            <div>
+              <span class="kicker">CLASSROOM SCHEDULE</span>
+              <h3>安排课堂排期</h3>
+              <p>从存档版本选择一个，设置首次上课日期和每天可用分钟数；活动按版本顺序自动分到各天，当天装不下时顺延到下一日。</p>
+            </div>
+            <Tag type="blue">{course.schedules.length} 份排期</Tag>
+          </div>
+          <div class="schedule-form">
+            <Select labelText="存档版本" selected={scheduleVersionId} on:change={(event) => { scheduleVersionId = readText(event); scheduleNotice = null; }}>
+              {#each course.versions as version}
+                <SelectItem value={version.id} text={`${version.label} · ${version.activities.length} 个活动 · ${formatTime(version.savedAt)}`} />
+              {/each}
+            </Select>
+            <TextInput labelText="首次上课日期" type="date" value={scheduleStartDate} on:input={(event) => { scheduleStartDate = readText(event); scheduleNotice = null; }} />
+            <TextInput labelText="每天可用分钟数" type="number" min="1" max="480" step="5" value={scheduleDailyMinutes} on:input={(event) => { scheduleDailyMinutes = readText(event); scheduleNotice = null; }} />
+            <div class="schedule-submit">
+              {#if scheduleVersion}
+                <p class="schedule-summary">
+                  {scheduleVersion.label} · {scheduleVersion.activities.length} 个活动 · 共 {scheduleVersionMinutes} 分钟
+                  {#if scheduleVersion.activities.length === 0}<em>（该版本无活动，无法排课）</em>{/if}
+                </p>
+              {/if}
+              <Button kind="primary" disabled={!scheduleVersion || scheduleVersion.activities.length === 0} on:click={createSchedule}>生成课堂排期</Button>
+            </div>
+          </div>
+          {#if scheduleNotice}
+            <InlineNotification
+              class="schedule-notice"
+              lowContrast
+              hideCloseButton
+              kind={scheduleNotice.kind}
+              title={scheduleNotice.title}
+              subtitle={scheduleNotice.subtitle}
+            />
+          {/if}
+        </Tile>
+
+        <Tile class="schedule-roster">
+          <div class="section-title">
+            <div>
+              <span class="kicker">SCHEDULED CLASSES</span>
+              <h3>已排课堂</h3>
+              <p>排期随课程保存在本浏览器；红色日期表示当天还有其他排期，原安排始终保留，可由老师决定调整哪一份。</p>
+            </div>
+            {#if conflictDates.size > 0}<Tag type="red">{conflictDates.size} 个冲突日期</Tag>{/if}
+          </div>
+          {#if schedules.length === 0}
+            <p class="empty-state">还没有课堂排期。从左侧时间线对某个存档版本点击“排课”，或在上方直接生成。</p>
+          {:else}
+            <div class="schedule-list">
+              {#each schedules as schedule, index (schedule.id)}
+                <article class:conflicted={schedulesWithConflicts.has(schedule.id)}>
+                  <header class="schedule-item-head">
+                    <div>
+                      <b>排期 #{schedules.length - index} · {schedule.versionLabel}</b>
+                      <p>首次上课 {formatDateKey(schedule.startDate)} · 每天 {schedule.dailyMinutes} 分钟 · {schedule.days.length} 天 · {formatTime(schedule.createdAt)} 创建</p>
+                    </div>
+                    <div class="schedule-item-actions">
+                      {#if schedulesWithConflicts.has(schedule.id)}<Tag type="red">存在日期冲突</Tag>{/if}
+                      <Button size="small" kind="danger-ghost" on:click={() => removeSchedule(schedule.id)}>删除</Button>
+                    </div>
+                  </header>
+                  <div class="schedule-days">
+                    {#each schedule.days as day, dayIndex}
+                      <div class:clash={conflictDates.has(day.date)} class="schedule-day">
+                        <div class="schedule-day-date">
+                          <strong>第 {dayIndex + 1} 天</strong>
+                          <span>{formatDateKey(day.date)}</span>
+                          {#if conflictDates.has(day.date)}
+                            <em>与 {conflictOwners(day.date, schedule.id).map((item) => item.versionLabel).join('、')} 冲突</em>
+                          {/if}
+                        </div>
+                        <div class="schedule-slots">
+                          {#each day.slots as slot}
+                            <div class="schedule-slot">
+                              <span class="slot-type {slot.type}">{slot.type}</span>
+                              <b>{slot.title}</b>
+                              <em>{slot.duration} 分钟</em>
+                            </div>
+                          {/each}
+                        </div>
+                        <div class="schedule-day-total" class:over={day.minutesUsed > schedule.dailyMinutes}>
+                          合计 {day.minutesUsed} / {schedule.dailyMinutes} 分钟
+                          {#if day.minutesUsed > schedule.dailyMinutes}（单个活动超过每日容量，独占一天）{/if}
+                        </div>
+                      </div>
+                    {/each}
+                  </div>
+                </article>
+              {/each}
+            </div>
+          {/if}
+        </Tile>
+      </section>
     </main>
   {/if}
 

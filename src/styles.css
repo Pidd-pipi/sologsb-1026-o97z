@@ -178,6 +178,43 @@ button, input, textarea, select { font: inherit; }
 .diff-list article.removed > span { color: #a2191f; }
 .diff-list b { font-size: 12px; }
 .diff-list p { margin: 3px 0 0; color: #6f6f6f; font-size: 10px; }
+.timeline-body { min-width: 0; }
+.timeline-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.timeline-head > button { margin-left: auto; }
+.schedule-count { padding: 2px 7px; color: #0043ce; background: #edf5ff; font-size: 10px; white-space: nowrap; }
+.schedule-board { margin-top: 12px; display: grid; grid-template-columns: .8fr 1.4fr; gap: 12px; align-items: start; }
+.schedule-planner, .schedule-roster { margin: 0; padding: 22px; border: 1px solid #e0e0e0; }
+.schedule-form { margin-top: 18px; display: grid; grid-template-columns: 1.4fr 1fr .8fr; gap: 14px; align-items: end; }
+.schedule-form :global(.bx--select), .schedule-form :global(.bx--form-item) { margin-bottom: 0; }
+.schedule-submit { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+.schedule-summary { margin: 0 0 4px; color: #525252; font-size: 11px; line-height: 1.5; }
+.schedule-summary em { color: #da1e28; font-style: normal; }
+.schedule-notice { margin-top: 16px; }
+.schedule-list { margin-top: 16px; display: grid; gap: 12px; }
+.schedule-list > article { border: 1px solid #d8d8d8; border-left: 4px solid #0f62fe; background: #fff; }
+.schedule-list > article.conflicted { border-left-color: #da1e28; }
+.schedule-item-head { padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid #e0e0e0; background: #fafafa; }
+.schedule-item-head b { font-size: 13px; }
+.schedule-item-head p { margin: 3px 0 0; color: #8d8d8d; font-size: 10px; }
+.schedule-item-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.schedule-days { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; padding: 14px 16px 16px; }
+.schedule-day { border: 1px solid #e0e0e0; background: #fff; display: flex; flex-direction: column; }
+.schedule-day.clash { border-color: #ff8389; box-shadow: inset 0 0 0 1px #ff8389; }
+.schedule-day-date { padding: 10px 12px; border-bottom: 1px solid #e0e0e0; background: #f4f4f4; }
+.schedule-day.clash .schedule-day-date { background: #fff1f1; }
+.schedule-day-date strong { display: block; color: #161616; font: 600 11px "IBM Plex Mono", monospace; letter-spacing: .06em; }
+.schedule-day-date span { display: block; margin-top: 2px; color: #393939; font-size: 12px; }
+.schedule-day-date em { display: block; margin-top: 4px; color: #a2191f; font-size: 10px; font-style: normal; }
+.schedule-slots { padding: 8px 12px; display: grid; gap: 6px; flex: 1; }
+.schedule-slot { display: grid; grid-template-columns: 34px 1fr auto; gap: 8px; align-items: center; }
+.slot-type { padding: 2px 3px; text-align: center; color: #0043ce; background: #edf5ff; font-size: 9px; }
+.slot-type.单词 { color: #6929c4; background: #f6f2ff; }
+.slot-type.句子 { color: #9f1853; background: #fff0f7; }
+.slot-type.练习 { color: #005d5d; background: #d9fbfb; }
+.schedule-slot b { font-size: 11px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.schedule-slot em { color: #8d8d8d; font-size: 10px; font-style: normal; }
+.schedule-day-total { padding: 8px 12px; border-top: 1px dashed #d8d8d8; color: #6f6f6f; font-size: 10px; }
+.schedule-day-total.over { color: #a2191f; }
 .app-footer { min-height: 46px; padding: 14px 24px; display: flex; justify-content: space-between; gap: 20px; color: #c6c6c6; background: #262626; font-size: 10px; }
 @media (max-width: 1180px) {
   .compose-layout { grid-template-columns: 280px 1fr; }
@@ -199,6 +236,9 @@ button, input, textarea, select { font: inherit; }
   .preview-stage { padding: 8px; }
   .device-preview.tablet, .device-preview.desktop { width: 100%; }
   .rule-grid, .version-layout-svelte { grid-template-columns: 1fr; }
+  .schedule-board { grid-template-columns: 1fr; }
+  .schedule-form { grid-template-columns: 1fr; align-items: stretch; }
+  .schedule-item-head { flex-direction: column; align-items: flex-start; }
   .issue-board > article { grid-template-columns: 38px 1fr; }
   .issue-board > article > button { grid-column: 2; width: fit-content; }
 }
